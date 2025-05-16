@@ -194,8 +194,8 @@ public class SolidWorksMacro
                 Console.WriteLine($"\nКомпонент: {iPosition} - {iPartName} - {componentCount}шт");
 
                 object[] components = bomTable.GetComponents(row);
-
-                if (components == null || components.Length == 0)
+                /*
+                if (components == null || components.Length < 0)
                 {
                     Console.WriteLine($"Ошибка: Компоненты не найдены для строки {row + 1}.");
 
@@ -268,7 +268,7 @@ public class SolidWorksMacro
                     }
 
                     continue;
-                }
+                }*/
 
                 if (components.Length > 0)
                 {
@@ -282,13 +282,15 @@ public class SolidWorksMacro
                             continue;
                         }
 
+                        Console.WriteLine($"Конфигурация компонента: {configuration}");
+
                         int modelType = model.GetType();
                         if (modelType == (int)swDocumentTypes_e.swDocPART)
                         {
                             string modelInfo = $"Модель компонента: {model.GetPathName()}";
                             Console.WriteLine(modelInfo);
                             IPartDoc partDoc = (IPartDoc)model;
-                            TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount);
+                            TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount, configuration);
                         }
                         Marshal.ReleaseComObject(model);
                         Marshal.ReleaseComObject(component);
@@ -336,8 +338,9 @@ public class SolidWorksMacro
         public Feature FlatPatternFeature;
         public string FileName;
         public IModelDoc2 model;
+        public string configuration;
     }
-    private void TraverseCutListFolders(IPartDoc partDoc, string iPartName, string iPosition, int iComponentCount)
+    private void TraverseCutListFolders(IPartDoc partDoc, string iPartName, string iPosition, int iComponentCount, string configuration)
     {
         IModelDoc2 model = null;
         Feature feat = null;
@@ -391,18 +394,14 @@ public class SolidWorksMacro
                         Marshal.ReleaseComObject(bodyFolder);
                         foreach (object objBody in bodies)
                         {
-                            if (objBody is IBody2 body)
-                            {
-                                // ... (твой код с body)
-                                Marshal.ReleaseComObject(body);
-                            }
+                            Marshal.ReleaseComObject(objBody);
                         }
                         continue;
                     }
 
                     cutListIndex++;
                     string fileName = $"{iPosition}.{cutListIndex}-{iPartName.Trim()}-{bodies.Length * iComponentCount}шт";
-                    Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName}");
+                    Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Конфигрурация: {configuration}");
 
                     IBody2 firstBody = (IBody2)bodies[0];
                     if (firstBody == null) continue;
@@ -414,7 +413,7 @@ public class SolidWorksMacro
                         Console.WriteLine($"    Листовой металл: {firstBody.Name} {subFeat.Name}");
                         // Получаем фичи, связанные с телом
                         object[] bodyFeatures = firstBody.GetFeatures() as object[];
-                        if (bodyFeatures != null)
+                        if (bodyFeatures.Length > 0)
                         {
                             foreach (IFeature bodyFeat in bodyFeatures.Cast<IFeature>())
                             {
@@ -431,7 +430,8 @@ public class SolidWorksMacro
                                     {
                                         FlatPatternFeature = (Feature)bodyFeat,
                                         FileName = fileName,
-                                        model = model
+                                        model = model,
+                                        configuration = configuration
                                     });
                                 }
                             }
@@ -477,9 +477,8 @@ public class SolidWorksMacro
             {
                 try
                 {
-                    ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model);
-                    Console.WriteLine($"    Экспорт завершён: {task.FileName} в {DXFPath}");
-                    Console.WriteLine($"    Заданий осталось: {exportTasks.LongCount()}");
+                    ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model, configuration);
+                    Console.WriteLine($"    Экспорт завершён: {task.FileName} - {configuration} путь {DXFPath}");
                 }
                 catch (Exception ex)
                 {
@@ -519,7 +518,8 @@ public class SolidWorksMacro
     public void ExportSheetMetalToDXF(
         Feature flatPattern,
         string fileName,
-        IModelDoc2 swModel
+        IModelDoc2 swModel,
+        string configuration = ""
     )
     {
 
@@ -537,11 +537,11 @@ public class SolidWorksMacro
         PartDoc partDoc = swModel as PartDoc;
         string modelPath = swModel.GetPathName();
 
-        Console.WriteLine($"    Экспорт в DXF: {fileName}");
+        Console.WriteLine($"    Экспорт в DXF: {fileName} - {configuration}");
 
         // Активируем документ
         int errors = 0;
-        SwApp.ActivateDoc3(
+        var doc = SwApp.ActivateDoc3(
             modelPath,
             false,
             (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
@@ -558,6 +558,14 @@ public class SolidWorksMacro
             Console.WriteLine($"Ошибка: Не удалось активировать документ: {modelPath}");
             return;
         }
+
+        bool success = doc.ShowConfiguration2(configuration);
+
+        if (!success)
+            Console.WriteLine($"Ошибка: не удалось переключиться на конфигурацию '{configuration}'");
+        else
+            Console.WriteLine($"Конфигурация '{configuration}' активирована.");
+
         double[] dataAlignment = new double[12];
         object varAlignment;
 
