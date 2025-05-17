@@ -438,7 +438,8 @@ public class SolidWorksMacro
 
                     if (IsWeldment(subFeat))
                     {
-                        string description = subFeat.GetDescription();
+                        Feature feet = subFeat as Feature;
+                        string description = feet.Description;
                         Console.WriteLine($"Описание фичи: {description}");
 
                         Console.WriteLine($"    Сварной элемент: {firstBody.Name} | ");
