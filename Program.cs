@@ -194,7 +194,7 @@ public class SolidWorksMacro
                 Console.WriteLine($"\nКомпонент: {iPosition} - {iPartName} - {componentCount}шт");
 
                 object[] components = bomTable.GetComponents(row);
-                /*
+                
                 if (components == null || components.Length < 0)
                 {
                     Console.WriteLine($"Ошибка: Компоненты не найдены для строки {row + 1}.");
@@ -230,7 +230,8 @@ public class SolidWorksMacro
                         // Сравниваем iPartName с названием модели
                         if (normalizedIPartName.Equals(modelTitle))
                         {
-                            selectedView = view;
+                            string configName = view.ReferencedConfiguration;
+
                             Console.WriteLine($"Найден совпадающий вид: {view.Name}, Модель: {model.GetTitle()}");
                             if (model == null)
                             {
@@ -253,7 +254,7 @@ public class SolidWorksMacro
                                     if (useComponentCount <= 0) useComponentCount = 1;
                                 }
 
-                                TraverseCutListFolders(partDoc, iPartName, iPosition, useComponentCount);
+                                TraverseCutListFolders(partDoc, iPartName, iPosition, useComponentCount, configName);
                             }
                             break;
                         }
@@ -268,7 +269,7 @@ public class SolidWorksMacro
                     }
 
                     continue;
-                }*/
+                }
 
                 if (components.Length > 0)
                 {
@@ -282,7 +283,8 @@ public class SolidWorksMacro
                             continue;
                         }
 
-                        Console.WriteLine($"Конфигурация компонента: {configuration}");
+                        string configName = component.ReferencedConfiguration;
+                        Console.WriteLine($"Конфигурация компонента: {configName}");
 
                         int modelType = model.GetType();
                         if (modelType == (int)swDocumentTypes_e.swDocPART)
@@ -290,7 +292,7 @@ public class SolidWorksMacro
                             string modelInfo = $"Модель компонента: {model.GetPathName()}";
                             Console.WriteLine(modelInfo);
                             IPartDoc partDoc = (IPartDoc)model;
-                            TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount, configuration);
+                            TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount, configName);
                         }
                         Marshal.ReleaseComObject(model);
                         Marshal.ReleaseComObject(component);
@@ -541,7 +543,7 @@ public class SolidWorksMacro
 
         // Активируем документ
         int errors = 0;
-        var doc = SwApp.ActivateDoc3(
+        IModelDoc2 doc = SwApp.ActivateDoc3(
             modelPath,
             false,
             (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
