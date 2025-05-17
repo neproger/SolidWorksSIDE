@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 
 public class SolidWorksMacro
 {
@@ -207,7 +208,6 @@ public class SolidWorksMacro
                         return;
                     }
 
-                    IView selectedView = null;
                     IModelDoc2 model = null;
 
                     object[] views = sheet.GetViews();
@@ -347,12 +347,7 @@ public class SolidWorksMacro
         IModelDoc2 model = null;
         Feature feat = null;
 
-        // 1. Описываем структуру для задания на экспорт
-        
-
-        // 2. Собираем все задачи в список:
         List<DXFExportTask> exportTasks = new List<DXFExportTask>();
-        string prevActiveDocPath = SwApp.IActiveDoc2?.GetPathName();
         try
         {
             if (partDoc == null)
@@ -367,8 +362,38 @@ public class SolidWorksMacro
             }
             
             model = (IModelDoc2)partDoc;
-            feat = model.FirstFeature();
+            string modelPath = model.GetPathName();
 
+            // Активируем документ
+            int errors = 0;
+            IModelDoc2 doc = SwApp.ActivateDoc3(
+                modelPath,
+                false,
+                (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
+                ref errors
+            );
+
+            if (errors != 0)
+            {
+                SwApp.SendMsgToUser2(
+                    $"Не удалось активировать документ: {modelPath}",
+                    (int)swMessageBoxIcon_e.swMbStop,
+                    (int)swMessageBoxBtn_e.swMbOk
+                );
+                Console.WriteLine($"Ошибка: Не удалось активировать документ: {modelPath}");
+                return;
+            }
+
+            
+            bool success = doc.ShowConfiguration2(configuration);
+            string activeConfigName = doc.GetActiveConfiguration()?.Name;
+            if (activeConfigName != configuration)
+            {
+                Console.WriteLine($"Ошибка: не удалось переключиться на конфигурацию - {configuration} / {success} | {doc.GetTitle()}");
+                return;
+            }
+
+            feat = doc.FirstFeature();
             Feature nextFeat = null;
             while (feat != null)
             {
@@ -410,6 +435,16 @@ public class SolidWorksMacro
                             
                     swBodyType_e bodyType = (swBodyType_e)firstBody.GetType();
                     Console.WriteLine($"    Тело: {firstBody.Name} {bodyType}");
+
+                    if (IsWeldment(subFeat))
+                    {
+                        string description = subFeat.GetDescription();
+                        Console.WriteLine($"Описание фичи: {description}");
+
+                        Console.WriteLine($"    Сварной элемент: {firstBody.Name} | ");
+                        ExportBodyToIGS(firstBody, fileName);
+                    }
+
                     if (firstBody.IsSheetMetal())
                     {
                         Console.WriteLine($"    Листовой металл: {firstBody.Name} {subFeat.Name}");
@@ -432,18 +467,14 @@ public class SolidWorksMacro
                                     {
                                         FlatPatternFeature = (Feature)bodyFeat,
                                         FileName = fileName,
-                                        model = model,
+                                        model = doc,
                                         configuration = configuration
                                     });
                                 }
                             }
                         }
                     }
-                    if (IsWeldment(subFeat))
-                    {
-                        Console.WriteLine($"    Сварной элемент: {firstBody.Name}");
-                        ExportBodyToIGS(firstBody, fileName);
-                    }
+
 
                     Marshal.ReleaseComObject(firstBody);
                     if (bodies == null || bodies.Length < 1)
@@ -537,36 +568,9 @@ public class SolidWorksMacro
         );
 
         PartDoc partDoc = swModel as PartDoc;
-        string modelPath = swModel.GetPathName();
 
-        Console.WriteLine($"    Экспорт в DXF: {fileName} - {configuration}");
 
-        // Активируем документ
-        int errors = 0;
-        IModelDoc2 doc = SwApp.ActivateDoc3(
-            modelPath,
-            false,
-            (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
-            ref errors
-        );
 
-        if (errors != 0)
-        {
-            SwApp.SendMsgToUser2(
-                $"Не удалось активировать документ: {modelPath}",
-                (int)swMessageBoxIcon_e.swMbStop,
-                (int)swMessageBoxBtn_e.swMbOk
-            );
-            Console.WriteLine($"Ошибка: Не удалось активировать документ: {modelPath}");
-            return;
-        }
-
-        bool success = doc.ShowConfiguration2(configuration);
-
-        if (!success)
-            Console.WriteLine($"Ошибка: не удалось переключиться на конфигурацию '{configuration}'");
-        else
-            Console.WriteLine($"Конфигурация '{configuration}' активирована.");
 
         double[] dataAlignment = new double[12];
         object varAlignment;
