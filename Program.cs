@@ -1,4 +1,5 @@
 ﻿
+using Microsoft.SqlServer.Server;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using System;
@@ -427,52 +428,69 @@ public class SolidWorksMacro
                     }
 
                     cutListIndex++;
-                    string fileName = $"{iPosition}.{cutListIndex}-{iPartName.Trim()}-{bodies.Length * iComponentCount}шт";
-                    Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Конфигрурация: {configuration}");
+                    
 
                     IBody2 firstBody = (IBody2)bodies[0];
                     if (firstBody == null) continue;
-                            
-                    swBodyType_e bodyType = (swBodyType_e)firstBody.GetType();
-                    Console.WriteLine($"    Тело: {firstBody.Name} {bodyType}");
 
-                    if (IsWeldment(subFeat))
+                    
+                    string description = subFeat.Description;
+
+                    int cutListType = bodyFolder.GetCutListType();
+                    /*
+                        -1 — Неизвестный тип (swCutListType_Unknown)
+
+                        1 — Твердотельное тело (swCutListType_SolidBody)
+
+                        2 — Листовой металл (swCutListType_Sheetmetal)
+
+                        3 — Сварная конструкция (swCutListType_Weldment)
+                    */
+                    
+
+                    if (cutListType == 3) // Сварная конструкция
                     {
-                        Feature feet = subFeat as Feature;
-                        string description = feet.Description;
-                        Console.WriteLine($"Описание фичи: {description}");
+                        double[] box = firstBody.GetBodyBox();
 
-                        Console.WriteLine($"    Сварной элемент: {firstBody.Name} | ");
+                        double[] sizes = new double[]
+                        {
+                            Math.Round((box[3] - box[0]) * 1000.0, 1), // ширина (X)
+                            Math.Round((box[4] - box[1]) * 1000.0, 1), // глубина
+                            Math.Round((box[5] - box[2]) * 1000.0, 1)  // высота
+                        };
+
+                        Array.Sort(sizes); // теперь sizes[2] — самое большое измерение
+
+                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {sizes[1]}х{sizes[0]}х{sizes[2]}мм - {bodies.Length * iComponentCount}шт";
+                        Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Тип: {cutListType}");
                         ExportBodyToIGS(firstBody, fileName);
                     }
 
-                    if (firstBody.IsSheetMetal())
+                    if (cutListType == 2) // Листовой металл
                     {
-                        Console.WriteLine($"    Листовой металл: {firstBody.Name} {subFeat.Name}");
-                        // Получаем фичи, связанные с телом
+                        var (length, width, thickness) = GetSheetMetalProperties(subFeat);
+
+                        Console.WriteLine($"Длина: {length}, Ширина: {width}, Толщина: {thickness}");
+
+                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {length}х{width}х{thickness}мм - {bodies.Length * iComponentCount}шт";
+
                         object[] bodyFeatures = firstBody.GetFeatures() as object[];
-                        if (bodyFeatures.Length > 0)
+                        if (bodyFeatures.Length < 1) return;
+
+                        foreach (IFeature bodyFeat in bodyFeatures.Cast<IFeature>())
                         {
-                            foreach (IFeature bodyFeat in bodyFeatures.Cast<IFeature>())
+                            string bodyFeatType = bodyFeat.GetTypeName2();
+                            if (bodyFeatType != "FlatPattern") continue;
+
+                            // Console.WriteLine($"      Добавляем задание на экспорт: {bodyFeat.Name}");
+                            // Добавляем задание на экспорт
+                            exportTasks.Add(new DXFExportTask
                             {
-                                if (bodyFeat == null) continue;
-
-                                string bodyFeatType = bodyFeat.GetTypeName2();
-                                Console.WriteLine($"        bodyFeatType: {bodyFeatType}");
-
-                                if (bodyFeatType == "FlatPattern")
-                                {
-                                    Console.WriteLine($"      Добавляем задание на экспорт: {bodyFeat.Name}");
-                                    // Добавляем задание на экспорт
-                                    exportTasks.Add(new DXFExportTask
-                                    {
-                                        FlatPatternFeature = (Feature)bodyFeat,
-                                        FileName = fileName,
-                                        model = doc,
-                                        configuration = configuration
-                                    });
-                                }
-                            }
+                                FlatPatternFeature = (Feature)bodyFeat,
+                                FileName = fileName,
+                                model = doc,
+                                configuration = configuration
+                            });
                         }
                     }
 
@@ -489,7 +507,6 @@ public class SolidWorksMacro
                                 Marshal.ReleaseComObject(body);
                             }
                         }
-                        continue;
                     }
 
                     if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
@@ -766,18 +783,35 @@ public class SolidWorksMacro
         }
     }
 
-    bool IsWeldment(Feature folder)
+    private (string Length, string Width, string Thickness) GetSheetMetalProperties(Feature feet)
     {
-        if (folder == null || folder.GetTypeName2() != "CutListFolder") return false;
+        CustomPropertyManager propMgr = feet.CustomPropertyManager;
+        // Возможные ключи для поиска свойств
+        string[] lengthKeys = new[] { "Длина граничной рамки", "Bounding Box Length" };
+        string[] widthKeys = new[] { "Ширина граничной рамки", "Bounding Box Width" };
+        string[] thicknessKeys = new[] { "Толщина листового металла", "Sheet Metal Thickness" };
 
-        var props = folder.CustomPropertyManager;
+        string length = FindPropertyValue(propMgr, lengthKeys);
+        string width = FindPropertyValue(propMgr, widthKeys);
+        string thickness = FindPropertyValue(propMgr, thicknessKeys);
 
-        props.Get4("DESCRIPTION", false, out string desc, out _);
-
-        return desc != null && (
-            desc.Contains("BEAM") ||
-            desc.Contains("TUBE") ||
-            desc.Contains("CHANNEL") ||
-            desc.Contains("ANGLE"));
+        return (length, width, thickness);
     }
+
+    private string FindPropertyValue(ICustomPropertyManager propMgr, string[] possibleKeys)
+    {
+        foreach (string key in possibleKeys)
+        {
+            bool found = propMgr.Get4(key, false, out string valOut, out string resolvedVal);
+            if (found && !string.IsNullOrWhiteSpace(resolvedVal))
+            {
+                Console.WriteLine($"Найдено свойство: {key} = {resolvedVal}");
+                return resolvedVal;
+            }
+        }
+
+        Console.WriteLine("Свойство не найдено ни по одному из ключей: " + string.Join(", ", possibleKeys));
+        return "";
+    }
+
 }
