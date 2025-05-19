@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 
 public class SolidWorksMacro
 {
@@ -151,7 +152,7 @@ public class SolidWorksMacro
                 return;
             }
 
-            Console.WriteLine($"Обработка таблицы: {table.Title}\nКоличество строк: {table.RowCount}, Столбцов: {table.ColumnCount}");
+            Console.WriteLine($"Обработка таблицы: {table.RowCount} строк");
 
             // Создать папку, если нужно
             string docDir = Path.GetDirectoryName(exportPath);
@@ -285,13 +286,11 @@ public class SolidWorksMacro
                         }
 
                         string configName = component.ReferencedConfiguration;
-                        Console.WriteLine($"Конфигурация компонента: {configName}");
+                        // Console.WriteLine($"Конфигурация компонента: {configName}");
 
                         int modelType = model.GetType();
                         if (modelType == (int)swDocumentTypes_e.swDocPART)
                         {
-                            string modelInfo = $"Модель компонента: {model.GetPathName()}";
-                            Console.WriteLine(modelInfo);
                             IPartDoc partDoc = (IPartDoc)model;
                             TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount, configName);
                         }
@@ -315,7 +314,7 @@ public class SolidWorksMacro
                 (int)swMessageBoxIcon_e.swMbInformation,
                 (int)swMessageBoxBtn_e.swMbOk
             );
-            Console.WriteLine("Обработка таблицы завершена.");
+            Console.WriteLine("\nОбработка таблицы завершена.");
         }
         catch (Exception ex)
         {
@@ -407,7 +406,7 @@ public class SolidWorksMacro
                     continue;
                 }
 
-                Console.WriteLine($"Найдена папка Solid Bodies: {iPosition}");
+                // Console.WriteLine($"Найдена папка Solid Bodies: {iPosition}");
 
                 Feature subFeat = feat.GetFirstSubFeature();
                 int cutListIndex = 0;
@@ -434,7 +433,7 @@ public class SolidWorksMacro
                     if (firstBody == null) continue;
 
                     
-                    string description = subFeat.Description;
+                    
 
                     int cutListType = bodyFolder.GetCutListType();
                     /*
@@ -450,19 +449,15 @@ public class SolidWorksMacro
 
                     if (cutListType == 3) // Сварная конструкция
                     {
-                        double[] box = firstBody.GetBodyBox();
+                        string description = subFeat.Description;
+                        string length = GetWeldBodyProperties(subFeat);
+                        // Console.WriteLine($"  Описпние: {description}");
 
-                        double[] sizes = new double[]
-                        {
-                            Math.Round((box[3] - box[0]) * 1000.0, 1), // ширина (X)
-                            Math.Round((box[4] - box[1]) * 1000.0, 1), // глубина
-                            Math.Round((box[5] - box[2]) * 1000.0, 1)  // высота
-                        };
+                        Regex regex = new Regex(@"\d{1,3},\d{2}");
+                        MatchCollection matches = regex.Matches(description);
 
-                        Array.Sort(sizes); // теперь sizes[2] — самое большое измерение
-
-                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {sizes[1]}х{sizes[0]}х{sizes[2]}мм - {bodies.Length * iComponentCount}шт";
-                        Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Тип: {cutListType}");
+                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {matches[0]}х{matches[1]}х{length}мм - {bodies.Length * iComponentCount}шт";
+                        // Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Тип: {cutListType}");
                         ExportBodyToIGS(firstBody, fileName);
                     }
 
@@ -470,7 +465,7 @@ public class SolidWorksMacro
                     {
                         var (length, width, thickness) = GetSheetMetalProperties(subFeat);
 
-                        Console.WriteLine($"Длина: {length}, Ширина: {width}, Толщина: {thickness}");
+                        // Console.WriteLine($"Длина: {length}, Ширина: {width}, Толщина: {thickness}");
 
                         string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {length}х{width}х{thickness}мм - {bodies.Length * iComponentCount}шт";
 
@@ -522,14 +517,12 @@ public class SolidWorksMacro
                 feat = nextFeat;
             }
 
-            // 3. Теперь — отдельный экспорт вне цикла (на уже "чистых" данных)
-            Console.WriteLine($"    Заданий всего: {exportTasks.LongCount()}");
+            // Console.WriteLine($"    Заданий всего: {exportTasks.LongCount()}");
             foreach (var task in exportTasks)
             {
                 try
                 {
                     ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model, configuration);
-                    Console.WriteLine($"    Экспорт завершён: {task.FileName} - {configuration} путь {DXFPath}");
                 }
                 catch (Exception ex)
                 {
@@ -626,7 +619,13 @@ public class SolidWorksMacro
             );
 
             if (!result)
+            {
                 throw new Exception("Failed to export flat pattern");
+            }
+            else
+            {
+                Console.WriteLine($"    DXF Успешно сохранен: {filePath}");
+            }
         }
     }
 
@@ -757,7 +756,7 @@ public class SolidWorksMacro
             }
             else
             {
-                Console.WriteLine($"    IGES Успешно сохранено: {fullPath}");
+                Console.WriteLine($"    IGES Успешно сохранен: {fullPath}");
             }
         }
         catch (Exception ex)
@@ -783,6 +782,17 @@ public class SolidWorksMacro
         }
     }
 
+    private string GetWeldBodyProperties(Feature feet)
+    {
+        CustomPropertyManager propMgr = feet.CustomPropertyManager;
+        // Возможные ключи для поиска свойств
+        string[] lengthKeys = new[] { "Длина", "Length" };
+
+        string length = FindPropertyValue(propMgr, lengthKeys);
+
+        return (length);
+    }
+
     private (string Length, string Width, string Thickness) GetSheetMetalProperties(Feature feet)
     {
         CustomPropertyManager propMgr = feet.CustomPropertyManager;
@@ -805,13 +815,13 @@ public class SolidWorksMacro
             bool found = propMgr.Get4(key, false, out string valOut, out string resolvedVal);
             if (found && !string.IsNullOrWhiteSpace(resolvedVal))
             {
-                Console.WriteLine($"Найдено свойство: {key} = {resolvedVal}");
+                // Console.WriteLine($"Найдено свойство: {key} = {resolvedVal}");
                 return resolvedVal;
             }
         }
 
         Console.WriteLine("Свойство не найдено ни по одному из ключей: " + string.Join(", ", possibleKeys));
-        return "";
+        return "-";
     }
 
 }
