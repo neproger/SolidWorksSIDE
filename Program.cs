@@ -340,7 +340,6 @@ public class SolidWorksMacro
         public Feature FlatPatternFeature;
         public string FileName;
         public IModelDoc2 model;
-        public string configuration;
     }
     private void TraverseCutListFolders(IPartDoc partDoc, string iPartName, string iPosition, int iComponentCount, string configuration)
     {
@@ -449,14 +448,9 @@ public class SolidWorksMacro
 
                     if (cutListType == 3) // Сварная конструкция
                     {
-                        string description = subFeat.Description;
-                        string length = GetWeldBodyProperties(subFeat);
-                        // Console.WriteLine($"  Описпние: {description}");
+                        var (length, width, depth ) = GetWeldBodyProperties(subFeat);
 
-                        Regex regex = new Regex(@"\d{1,3},\d{2}");
-                        MatchCollection matches = regex.Matches(description);
-
-                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {matches[0]}х{matches[1]}х{length}мм - {bodies.Length * iComponentCount}шт";
+                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {width}х{depth}х{length}мм - {bodies.Length * iComponentCount}шт";
                         // Console.WriteLine($"  Cut List: {subFeat.Name} Имя файла: {fileName} Тип: {cutListType}");
                         ExportBodyToIGS(firstBody, fileName);
                     }
@@ -483,8 +477,7 @@ public class SolidWorksMacro
                             {
                                 FlatPatternFeature = (Feature)bodyFeat,
                                 FileName = fileName,
-                                model = doc,
-                                configuration = configuration
+                                model = doc
                             });
                         }
                     }
@@ -522,7 +515,7 @@ public class SolidWorksMacro
             {
                 try
                 {
-                    ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model, configuration);
+                    ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model);
                 }
                 catch (Exception ex)
                 {
@@ -562,8 +555,7 @@ public class SolidWorksMacro
     public void ExportSheetMetalToDXF(
         Feature flatPattern,
         string fileName,
-        IModelDoc2 swModel,
-        string configuration = ""
+        IModelDoc2 swModel
     )
     {
 
@@ -579,9 +571,6 @@ public class SolidWorksMacro
         );
 
         PartDoc partDoc = swModel as PartDoc;
-
-
-
 
         double[] dataAlignment = new double[12];
         object varAlignment;
@@ -782,31 +771,73 @@ public class SolidWorksMacro
         }
     }
 
-    private string GetWeldBodyProperties(Feature feet)
+    private (string Length, string Width, string Depth) GetWeldBodyProperties(Feature feat)
     {
-        CustomPropertyManager propMgr = feet.CustomPropertyManager;
-        // Возможные ключи для поиска свойств
-        string[] lengthKeys = new[] { "Длина", "Length" };
+        CustomPropertyManager propMgr = feat.CustomPropertyManager;
+
+        string[] lengthKeys = { "Длина", "Length" };
+        string[] descriptionKeys = { "Описание", "Description" };
 
         string length = FindPropertyValue(propMgr, lengthKeys);
+        string description = FindPropertyValue(propMgr, descriptionKeys);
 
-        return (length);
+        string cleaned = description.Replace(" ", "");
+
+        string width = "-";
+        string depth = "-";
+
+        if (!string.IsNullOrWhiteSpace(description))
+        {
+            // Ищем шаблон вроде "40,00 X 40,00 X 2,00"
+            Regex regex = new Regex(@"(\d{1,4}(?:[.,]\d{1,2})?)[xX×](\d{1,4}(?:[.,]\d{1,2})?)[xX×](\d{1,4}(?:[.,]\d{1,2})?)");
+
+            Match match = regex.Match(cleaned);
+
+            if (match.Success)
+            {
+                width = match.Groups[1].Value;
+                depth = match.Groups[2].Value;
+                string thickness = match.Groups[3].Value;
+
+                // Console.WriteLine($"Ширина: {width}, Высота: {depth}, Толщина: {thickness}");
+            }
+            else
+            {
+                Console.WriteLine("⚠ Не удалось распарсить габариты профиля из описания.");
+            }
+        }
+
+        return (length, width, depth);
     }
+
 
     private (string Length, string Width, string Thickness) GetSheetMetalProperties(Feature feet)
     {
         CustomPropertyManager propMgr = feet.CustomPropertyManager;
-        // Возможные ключи для поиска свойств
+
         string[] lengthKeys = new[] { "Длина граничной рамки", "Bounding Box Length" };
         string[] widthKeys = new[] { "Ширина граничной рамки", "Bounding Box Width" };
         string[] thicknessKeys = new[] { "Толщина листового металла", "Sheet Metal Thickness" };
 
-        string length = FindPropertyValue(propMgr, lengthKeys);
-        string width = FindPropertyValue(propMgr, widthKeys);
+        string lengthRaw = FindPropertyValue(propMgr, lengthKeys);
+        string widthRaw = FindPropertyValue(propMgr, widthKeys);
         string thickness = FindPropertyValue(propMgr, thicknessKeys);
+
+        string FormatToSingleDecimal(string input)
+        {
+            if (double.TryParse(input.Replace(',', '.'), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double value))
+            {
+                return value.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            return input; // Возвращаем как есть, если не получилось распарсить
+        }
+
+        string length = FormatToSingleDecimal(lengthRaw);
+        string width = FormatToSingleDecimal(widthRaw);
 
         return (length, width, thickness);
     }
+
 
     private string FindPropertyValue(ICustomPropertyManager propMgr, string[] possibleKeys)
     {
