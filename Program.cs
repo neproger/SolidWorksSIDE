@@ -564,7 +564,7 @@ public class SolidWorksMacro
             includeHiddenEdges: false,       // Включать скрытые кромки (бит 2)
             exportBendLines: true,          // Экспортировать линии сгиба (бит 3)
             includeSketches: false,         // Включать эскизы (бит 4)
-            mergeCoplanarFaces: false,       // Объединять копланарные грани (бит 5)
+            mergeCoplanarFaces: true,       // Объединять копланарные грани (бит 5)
             exportLibraryFeatures: false,   // Экспортировать библиотечные элементы (бит 6)
             exportFormingTools: false,      // Экспортировать формообразующие инструменты (бит 7)
             exportBoundingBox: false        // Экспортировать габаритный прямоугольник (бит 12)
@@ -578,7 +578,7 @@ public class SolidWorksMacro
         dataAlignment[0] = 0.0;
         dataAlignment[1] = 0.0;
         dataAlignment[2] = 0.0;
-        dataAlignment[3] = 1.0;
+        dataAlignment[3] = 0.0;
         dataAlignment[4] = 0.0;
         dataAlignment[5] = 0.0;
         dataAlignment[6] = 0.0;
@@ -602,7 +602,7 @@ public class SolidWorksMacro
                 true,                                               // Экспортировать плоский шаблон (развертку)
                 varAlignment,                                       // Массив из 12 значений double, содержащий информацию, связанную с выравниванием выходных данных
                 false,                                              // Экспортировать только выбранные элементы (false = все элементы)
-                false,                                              // Игнорировать невидимые слои (false = включать все слои)
+                true,                                              // Игнорировать невидимые слои (false = включать все слои)
                 sheetMetalOptions,                                  // Битовая маска опций для экспорта листового металла
                 null                                                // Массив имен представлений аннотаций для экспорта
             );
