@@ -661,21 +661,15 @@ public class SolidWorksMacro
 
         PartDoc partDoc = swModel as PartDoc;
 
-        double[] dataAlignment = new double[12];
-        object varAlignment;
+        double[] dataAlignment = new double[]
+        {
+            1, 0, 0,  // X-направление
+            0, 1, 0,  // Y-направление
+            0, 0, 1,  // Z-направление
+            0, 0, 0   // Смещение
+        };
 
-        dataAlignment[0] = 0.0;
-        dataAlignment[1] = 0.0;
-        dataAlignment[2] = 0.0;
-        dataAlignment[3] = 0.0;
-        dataAlignment[4] = 0.0;
-        dataAlignment[5] = 0.0;
-        dataAlignment[6] = 0.0;
-        dataAlignment[7] = 0.0;
-        dataAlignment[8] = 0.0;
-        dataAlignment[9] = 0.0;
-        dataAlignment[10] = 0.0;
-        dataAlignment[11] = 0.0;
+        object varAlignment;
 
         varAlignment = dataAlignment;
 
