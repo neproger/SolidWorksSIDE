@@ -1,14 +1,10 @@
-﻿
-using Microsoft.SqlServer.Server;
-using SolidWorks.Interop.sldworks;
+﻿using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 
 public class SolidWorksMacro
@@ -198,7 +194,7 @@ public class SolidWorksMacro
                 Console.WriteLine($"\nКомпонент: {iPosition} - {iPartName} - {componentCount}шт");
 
                 object[] components = bomTable.GetComponents(row);
-                
+
                 if (components == null || components.Length < 0)
                 {
                     Console.WriteLine($"Ошибка: Компоненты не найдены для строки {row + 1}.");
@@ -343,7 +339,12 @@ public class SolidWorksMacro
         public IModelDoc2 model;
         public string bodyName;
     }
-    private void TraverseCutListFolders(IPartDoc partDoc, string iPartName, string iPosition, int iComponentCount, string configuration)
+    private void TraverseCutListFolders(
+        IPartDoc partDoc,
+        string iPartName,
+        string iPosition,
+        int iComponentCount,
+        string configuration)
     {
         IModelDoc2 model = null;
         Feature feat = null;
@@ -361,7 +362,7 @@ public class SolidWorksMacro
                 Console.WriteLine($"Ошибка: Не удалось получить документ детали для {iPartName}.");
                 return;
             }
-            
+
             model = (IModelDoc2)partDoc;
             string modelPath = model.GetPathName();
 
@@ -385,7 +386,7 @@ public class SolidWorksMacro
                 return;
             }
 
-            
+
             bool success = doc.ShowConfiguration2(configuration);
             string activeConfigName = doc.GetActiveConfiguration()?.Name;
             if (activeConfigName != configuration)
@@ -414,7 +415,7 @@ public class SolidWorksMacro
                 while (subFeat != null)
                 {
                     if (subFeat.GetTypeName2() != "CutListFolder") continue;
-                        
+
                     BodyFolder bodyFolder = (BodyFolder)subFeat.GetSpecificFeature2();
                     object[] bodies = bodyFolder?.GetBodies();
                     if (bodies == null || bodies.Length < 1)
@@ -428,13 +429,13 @@ public class SolidWorksMacro
                     }
 
                     cutListIndex++;
-                    
+
 
                     IBody2 firstBody = (IBody2)bodies[0];
                     if (firstBody == null) continue;
 
-                    
-                    
+
+
 
                     int cutListType = bodyFolder.GetCutListType();
                     /*
@@ -446,11 +447,11 @@ public class SolidWorksMacro
 
                         3 — Сварная конструкция (swCutListType_Weldment)
                     */
-                    
+
 
                     if (cutListType == 3) // Сварная конструкция
                     {
-                        var (length, width, depth ) = GetWeldBodyProperties(subFeat);
+                        var (length, width, depth) = GetWeldBodyProperties(subFeat);
 
                         string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {width}х{depth}х{length}мм - {bodies.Length * iComponentCount}шт";
 
@@ -459,7 +460,7 @@ public class SolidWorksMacro
 
                     if (cutListType == 2) // Листовой металл
                     {
-                        var (length, width, thickness) = GetSheetMetalProperties(subFeat);;
+                        var (length, width, thickness) = GetSheetMetalProperties(subFeat); ;
 
                         string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {length}х{width}х{thickness}мм - {bodies.Length * iComponentCount}шт";
 
@@ -497,7 +498,7 @@ public class SolidWorksMacro
                     }
 
                     if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
-                        
+
 
                     Feature nextSubFeat = subFeat.GetNextSubFeature();
                     if (subFeat != null) Marshal.ReleaseComObject(subFeat);
@@ -515,7 +516,7 @@ public class SolidWorksMacro
                 try
                 {
                     ExportSheetMetalToDXF(task.FlatPatternFeature, task.FileName, task.model);
-                    
+
                     // ExportFlatPatternToDXF(task.FlatPatternFeature, task.bodyName, task.FileName, task.model); 
                 }
                 catch (Exception ex)
@@ -552,95 +553,6 @@ public class SolidWorksMacro
             if (feat != null) Marshal.ReleaseComObject(feat);
         }
     }
-
-    public bool ExportFlatPatternToDXF(Feature FlatPatternFeature, string bodyName, string fileName, IModelDoc2 swModel)
-    {
-
-        ModelDoc2 drawingDoc = null;
-        int errors = 0;
-
-        try
-        {
-            // Получаем тело развертки
-            
-
-            // Скрываем все тела кроме нужного (временно)
-
-            // Создаем новый чертеж
-            drawingDoc = (ModelDoc2)SwApp.NewDocument(
-                SwApp.GetUserPreferenceStringValue((int)swUserPreferenceStringValue_e.swDefaultTemplateDrawing),
-                (int)swDwgPaperSizes_e.swDwgPaperA4size, 0, 0);
-
-            if (drawingDoc == null)
-                throw new Exception("Не удалось создать новый чертеж");
-
-            DrawingDoc swDraw = (DrawingDoc)drawingDoc;
-            Sheet currentSheet = swDraw.GetCurrentSheet();
-            currentSheet.SetTemplateName(""); // сбросить шаблон
-            currentSheet.SetSheetFormatName(""); // убрать формат
-
-            // Добавляем вид модели на чертеж
-            string modelPath = swModel.GetPathName();
-            string flatName = FlatPatternFeature.Name;
-
-            // Добавляем вид спереди (или развертку)
-            View baseView = swDraw.CreateDrawViewFromModelView3(
-                modelPath, "", 0, 0, 0);
-            if (baseView == null)
-                throw new Exception("Не удалось создать вид развертки на чертеже");
-
-            baseView.ScaleDecimal = 1.0; // Устанавливаем масштаб 1:1
-            
-            object[] arrBody = (object[])baseView.Bodies;
-            List<Body2> arrBodiesIn = new List<Body2>();
-
-            for (int i = 0; i < arrBody.Length; i++)
-            {
-                Body2 swBody = (Body2)arrBody[i];
-                Console.WriteLine($"Проверяем тело: {swBody.Name} {bodyName} {flatName}");
-                if (swBody.Name == bodyName)
-                {
-                    arrBodiesIn.Add(swBody); // Добавляем нужное тело в список
-                }
-                else
-                {
-                    Marshal.ReleaseComObject(swBody); // Освобождаем не нужные тела
-                }
-            }
-            // Если дальше нужен именно object[]
-            object[] bodiesArray = arrBodiesIn.ToArray();
-
-            // Сохраняем чертеж в DXF
-            string filePath = Path.Combine(DXFPath, $"{fileName}.dxf");
-            bool saved = drawingDoc.Extension.SaveAs(
-                filePath,
-                (int)swSaveAsVersion_e.swSaveAsCurrentVersion,
-                (int)swSaveAsOptions_e.swSaveAsOptions_Silent,
-                null, ref errors, ref errors);
-
-            if (!saved)
-                throw new Exception("Не удалось сохранить DXF. Код ошибки: " + errors);
-
-            return true;
-        }
-        catch (Exception ex)
-        {
-            SwApp.SendMsgToUser2("Ошибка экспорта развертки: " + ex.Message,
-                (int)swMessageBoxIcon_e.swMbStop, (int)swMessageBoxBtn_e.swMbOk);
-            return false;
-        }
-        finally
-        {
-            
-            // Закрываем чертеж без сохранения, если не нужно хранить его
-            if (drawingDoc != null)
-            {
-                string docName = drawingDoc.GetTitle();
-                SwApp.CloseDoc(docName);
-            }
-        }
-    }
-
     public void ExportSheetMetalToDXF(
         Feature flatPattern,
         string fileName,
