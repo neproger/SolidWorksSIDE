@@ -31,11 +31,21 @@ public class SolidWorksMacro
             }
 
             IModelDoc2 doc = SwApp.IActiveDoc2;
-            exportPath = doc.GetPathName();
             if (doc == null)
             {
                 SwApp.SendMsgToUser2(
                     "Откройте документ перед запуском макроса.",
+                    (int)swMessageBoxIcon_e.swMbWarning,
+                    (int)swMessageBoxBtn_e.swMbOk
+                );
+                return;
+            }
+
+            exportPath = doc.GetPathName();
+            if (string.IsNullOrWhiteSpace(exportPath))
+            {
+                SwApp.SendMsgToUser2(
+                    "Сохраните чертёж перед запуском макроса.",
                     (int)swMessageBoxIcon_e.swMbWarning,
                     (int)swMessageBoxBtn_e.swMbOk
                 );
@@ -188,6 +198,7 @@ public class SolidWorksMacro
             {
 
                 int componentCount = bomTable.GetComponentsCount2(row, configuration, out string iPosition, out string iPartName);
+                if (componentCount <= 0) componentCount = 1;
 
                 if (string.IsNullOrWhiteSpace(iPartName)) continue;
 
@@ -195,7 +206,7 @@ public class SolidWorksMacro
 
                 object[] components = bomTable.GetComponents(row);
 
-                if (components == null || components.Length < 0)
+                if (components == null || components.Length == 0)
                 {
                     Console.WriteLine($"Ошибка: Компоненты не найдены для строки {row + 1}.");
 
@@ -210,6 +221,12 @@ public class SolidWorksMacro
                     IModelDoc2 model = null;
 
                     object[] views = sheet.GetViews();
+                    if (views == null || views.Length == 0)
+                    {
+                        Console.WriteLine("На текущем листе не найдены виды для поиска модели.");
+                        continue;
+                    }
+
                     // Нормализуем iPartName для сравнения
                     string normalizedIPartName = iPartName?.Trim().ToLower() ?? "";
                     // Перебираем все виды, ищем совпадение по имени модели
@@ -386,14 +403,27 @@ public class SolidWorksMacro
                 return;
             }
 
-
-            bool success = doc.ShowConfiguration2(configuration);
-            string activeConfigName = doc.GetActiveConfiguration()?.Name;
-            if (activeConfigName != configuration)
+            if (!string.IsNullOrWhiteSpace(configuration))
             {
-                Console.WriteLine($"Ошибка: не удалось переключиться на конфигурацию - {configuration} / {success} | {doc.GetTitle()}");
-                return;
+                Console.WriteLine($"Конфигурация - '{configuration}'");
+
+                bool success = doc.ShowConfiguration2(configuration);
+                string activeConfigName = doc.GetActiveConfiguration()?.Name;
+
+                if (activeConfigName != configuration)
+                {
+                    Console.WriteLine($"Ошибка: не удалось переключиться на конфигурацию - {configuration} / {success} | {doc.GetTitle()}");
+                    return;
+                }
             }
+            else
+            {
+                Console.WriteLine($"Конфигурация - '{doc.GetActiveConfiguration()?.Name}'");
+            }
+
+            bool editRebuildResult = doc.EditRebuild3();
+            bool forceRebuildResult = doc.ForceRebuild3(false);
+            Console.WriteLine($"Перестроение документа: EditRebuild3={editRebuildResult}, ForceRebuild3={forceRebuildResult}");
 
             feat = doc.FirstFeature();
             Feature nextFeat = null;
@@ -414,17 +444,21 @@ public class SolidWorksMacro
                 int cutListIndex = 0;
                 while (subFeat != null)
                 {
-                    if (subFeat.GetTypeName2() != "CutListFolder") continue;
+                    Feature nextSubFeat = subFeat.GetNextSubFeature();
+                    if (subFeat.GetTypeName2() != "CutListFolder")
+                    {
+                        if (subFeat != null) Marshal.ReleaseComObject(subFeat);
+                        subFeat = nextSubFeat;
+                        continue;
+                    }
 
                     BodyFolder bodyFolder = (BodyFolder)subFeat.GetSpecificFeature2();
                     object[] bodies = bodyFolder?.GetBodies();
                     if (bodies == null || bodies.Length < 1)
                     {
-                        Marshal.ReleaseComObject(bodyFolder);
-                        foreach (object objBody in bodies)
-                        {
-                            Marshal.ReleaseComObject(objBody);
-                        }
+                        if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
+                        if (subFeat != null) Marshal.ReleaseComObject(subFeat);
+                        subFeat = nextSubFeat;
                         continue;
                     }
 
@@ -432,7 +466,13 @@ public class SolidWorksMacro
 
 
                     IBody2 firstBody = (IBody2)bodies[0];
-                    if (firstBody == null) continue;
+                    if (firstBody == null)
+                    {
+                        if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
+                        if (subFeat != null) Marshal.ReleaseComObject(subFeat);
+                        subFeat = nextSubFeat;
+                        continue;
+                    }
 
 
 
@@ -465,21 +505,27 @@ public class SolidWorksMacro
                         string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {length}х{width}х{thickness}мм - {bodies.Length * iComponentCount}шт";
 
                         object[] bodyFeatures = firstBody.GetFeatures() as object[];
-                        if (bodyFeatures.Length < 1) return;
-
-                        foreach (IFeature bodyFeat in bodyFeatures.Cast<IFeature>())
+                        if (bodyFeatures == null || bodyFeatures.Length < 1)
                         {
-                            string bodyFeatType = bodyFeat.GetTypeName2();
-                            if (bodyFeatType != "FlatPattern") continue;
+                            Console.WriteLine($"Не найдены фичи тела для экспорта DXF: {firstBody.Name}");
+                        }
+                        else
+                        {
 
-                            // Добавляем задание на экспорт
-                            exportTasks.Add(new DXFExportTask
+                            foreach (IFeature bodyFeat in bodyFeatures.Cast<IFeature>())
                             {
-                                FlatPatternFeature = (Feature)bodyFeat,
-                                FileName = fileName,
-                                model = doc,
-                                bodyName = firstBody.Name
-                            });
+                                string bodyFeatType = bodyFeat.GetTypeName2();
+                                if (bodyFeatType != "FlatPattern") continue;
+
+                                // Добавляем задание на экспорт
+                                exportTasks.Add(new DXFExportTask
+                                {
+                                    FlatPatternFeature = (Feature)bodyFeat,
+                                    FileName = fileName,
+                                    model = doc,
+                                    bodyName = firstBody.Name
+                                });
+                            }
                         }
                     }
 
@@ -500,7 +546,6 @@ public class SolidWorksMacro
                     if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
 
 
-                    Feature nextSubFeat = subFeat.GetNextSubFeature();
                     if (subFeat != null) Marshal.ReleaseComObject(subFeat);
                     subFeat = nextSubFeat;
                 }
@@ -539,7 +584,7 @@ public class SolidWorksMacro
         {
             // Проверяешь, остался ли активным нужный документ
             IModelDoc2 currentActiveDoc = SwApp.IActiveDoc2;
-            if (currentActiveDoc != null)
+            if (currentActiveDoc != null && model != null)
             {
                 string currentPath = currentActiveDoc.GetPathName();
                 if (currentPath == model.GetPathName())
@@ -548,7 +593,7 @@ public class SolidWorksMacro
                     SwApp.CloseDoc(model.GetTitle());
                 }
             }
-            Marshal.ReleaseComObject(currentActiveDoc);
+            if (currentActiveDoc != null) Marshal.ReleaseComObject(currentActiveDoc);
             if (model != null) Marshal.ReleaseComObject(model);
             if (feat != null) Marshal.ReleaseComObject(feat);
         }
