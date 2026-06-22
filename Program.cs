@@ -421,7 +421,6 @@ public class SolidWorksMacro
                 Console.WriteLine($"Конфигурация - '{doc.GetActiveConfiguration()?.Name}'");
             }
 
-            doc.EditRebuild3();
             doc.ForceRebuild3(false);
 
             feat = doc.FirstFeature();
