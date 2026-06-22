@@ -421,9 +421,8 @@ public class SolidWorksMacro
                 Console.WriteLine($"Конфигурация - '{doc.GetActiveConfiguration()?.Name}'");
             }
 
-            bool editRebuildResult = doc.EditRebuild3();
-            bool forceRebuildResult = doc.ForceRebuild3(false);
-            Console.WriteLine($"Перестроение документа: EditRebuild3={editRebuildResult}, ForceRebuild3={forceRebuildResult}");
+            doc.EditRebuild3();
+            doc.ForceRebuild3(false);
 
             feat = doc.FirstFeature();
             Feature nextFeat = null;
