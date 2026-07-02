@@ -52,17 +52,30 @@ public class SolidWorksMacro
                 return;
             }
 
-            if (doc.GetType() != (int)swDocumentTypes_e.swDocDRAWING)
+            int documentType = doc.GetType();
+            if (documentType == (int)swDocumentTypes_e.swDocDRAWING)
             {
-                SwApp.SendMsgToUser2(
-                    "Активный документ должен быть чертежом!",
-                    (int)swMessageBoxIcon_e.swMbWarning,
-                    (int)swMessageBoxBtn_e.swMbOk
-                );
+                ProcessSelectedTable();
                 return;
             }
 
-            ProcessSelectedTable();
+            if (documentType == (int)swDocumentTypes_e.swDocASSEMBLY)
+            {
+                ProcessAssembly();
+                return;
+            }
+
+            if (documentType == (int)swDocumentTypes_e.swDocPART)
+            {
+                ProcessActivePart();
+                return;
+            }
+
+            SwApp.SendMsgToUser2(
+                "Активный документ должен быть чертежом, сборкой или деталью.",
+                (int)swMessageBoxIcon_e.swMbWarning,
+                (int)swMessageBoxBtn_e.swMbOk
+            );
         }
         catch (Exception ex)
         {
@@ -161,38 +174,9 @@ public class SolidWorksMacro
 
             Console.WriteLine($"Обработка таблицы: {table.RowCount} строк");
 
-            // Создать папку, если нужно
             string docDir = Path.GetDirectoryName(exportPath);
-            DXFPath = Path.Combine(docDir, "DXF");
-            IGSPath = Path.Combine(docDir, "IGS");
-
-            if (Directory.Exists(DXFPath))
-            {
-                // Удаляем все файлы в папке
-                foreach (string file in Directory.GetFiles(DXFPath))
-                {
-                    File.Delete(file);
-                }
-            }
-            else
-            {
-                // Создаем папку, если она не существует
-                Directory.CreateDirectory(DXFPath);
-            }
-
-            if (Directory.Exists(IGSPath))
-            {
-                // Удаляем все файлы в папке
-                foreach (string file in Directory.GetFiles(IGSPath))
-                {
-                    File.Delete(file);
-                }
-            }
-            else
-            {
-                // Создаем папку, если она не существует
-                Directory.CreateDirectory(IGSPath);
-            }
+            string outputBaseName = GetBomOutputBaseName(bomTable);
+            List<ExportRequest> exportRequests = new List<ExportRequest>();
 
             for (int row = 1; row < table.RowCount; row++)
             {
@@ -201,8 +185,6 @@ public class SolidWorksMacro
                 if (componentCount <= 0) componentCount = 1;
 
                 if (string.IsNullOrWhiteSpace(iPartName)) continue;
-
-                Console.WriteLine($"\nКомпонент: {iPosition} - {iPartName} - {componentCount}шт");
 
                 object[] components = bomTable.GetComponents(row);
 
@@ -218,8 +200,6 @@ public class SolidWorksMacro
                         return;
                     }
 
-                    IModelDoc2 model = null;
-
                     object[] views = sheet.GetViews();
                     if (views == null || views.Length == 0)
                     {
@@ -234,54 +214,28 @@ public class SolidWorksMacro
                     {
                         if (view == null) continue;
 
-                        model = view.ReferencedDocument;
-                        if (model == null)
+                        string referencedModelPath = view.GetReferencedModelName();
+                        if (string.IsNullOrWhiteSpace(referencedModelPath))
                         {
                             Console.WriteLine($"Вид {view.Name} не ссылается на модель.");
                             continue;
                         }
 
-                        string modelTitle = System.IO.Path.GetFileNameWithoutExtension(model.GetTitle())?.ToLower() ?? "";
+                        string modelTitle = System.IO.Path.GetFileNameWithoutExtension(referencedModelPath)?.ToLower() ?? "";
 
                         // Сравниваем iPartName с названием модели
                         if (normalizedIPartName.Equals(modelTitle))
                         {
                             string configName = view.ReferencedConfiguration;
 
-                            Console.WriteLine($"Найден совпадающий вид: {view.Name}, Модель: {model.GetTitle()}");
-                            if (model == null)
-                            {
-                                SwApp.SendMsgToUser2("Не удалось получить ссылочную модель из вида.", (int)swMessageBoxIcon_e.swMbWarning, (int)swMessageBoxBtn_e.swMbOk);
-                                return;
-                            }
-
-                            // Проверка, является ли модель деталью
-                            if (model.GetType() == (int)swDocumentTypes_e.swDocPART)
-                            {
-                                IPartDoc partDoc = (IPartDoc)model;
-                                Console.WriteLine($"Деталь, связанная с таблицей: {model.GetTitle()}");
-
-                                // Используем количество из таблицы, если доступно
-                                int useComponentCount = 1;
-
-                                if (bomTable != null)
-                                {
-                                    useComponentCount = bomTable.GetComponentsCount2(row, configuration, out _, out _);
-                                    if (useComponentCount <= 0) useComponentCount = 1;
-                                }
-
-                                TraverseCutListFolders(partDoc, iPartName, iPosition, useComponentCount, configName);
-                            }
+                            Console.WriteLine($"Найден совпадающий вид: {view.Name}, Модель: {referencedModelPath}");
+                            AddExportRequest(exportRequests, referencedModelPath, iPartName, iPosition, componentCount, configName, docDir, outputBaseName, true);
                             break;
                         }
                         else
                         {
                             Console.WriteLine($"Вид {normalizedIPartName} не соответствует модели {modelTitle}");
                         }
-
-                        // Освобождаем временный model, если он не подходит
-                        Marshal.ReleaseComObject(model);
-                        model = null;
                     }
 
                     continue;
@@ -292,23 +246,8 @@ public class SolidWorksMacro
                     IComponent2 component = components[0] as IComponent2;
                     if (component != null)
                     {
-                        IModelDoc2 model = component.GetModelDoc2();
-                        if (model == null)
-                        {
-                            Console.WriteLine($"Не удалось получить модель для компонента в строке {row + 1}.");
-                            continue;
-                        }
-
                         string configName = component.ReferencedConfiguration;
-                        // Console.WriteLine($"Конфигурация компонента: {configName}");
-
-                        int modelType = model.GetType();
-                        if (modelType == (int)swDocumentTypes_e.swDocPART)
-                        {
-                            IPartDoc partDoc = (IPartDoc)model;
-                            TraverseCutListFolders(partDoc, iPartName, iPosition, componentCount, configName);
-                        }
-                        Marshal.ReleaseComObject(model);
+                        AddExportRequest(exportRequests, component.GetPathName(), iPartName, iPosition, componentCount, configName, docDir, outputBaseName, true);
                         Marshal.ReleaseComObject(component);
                     }
                     else
@@ -322,6 +261,8 @@ public class SolidWorksMacro
                     }
                 }
             }
+
+            ProcessExportRequests(exportRequests);
 
             SwApp.SendMsgToUser2(
                 "Обработка таблицы завершена.",
@@ -349,6 +290,497 @@ public class SolidWorksMacro
         }
     }
 
+    private void ProcessAssembly()
+    {
+        IModelDoc2 activeDoc = null;
+        ISelectionMgr selectionMgr = null;
+
+        try
+        {
+            activeDoc = SwApp.IActiveDoc2;
+            selectionMgr = activeDoc?.ISelectionManager;
+            List<ExportRequest> exportRequests = new List<ExportRequest>();
+            string docDir = Path.GetDirectoryName(exportPath);
+            string outputBaseName = SanitizeFileName(Path.GetFileNameWithoutExtension(exportPath));
+            int selectedObjectCount = selectionMgr?.GetSelectedObjectCount2(-1) ?? 0;
+            IAssemblyDoc assemblyDoc = activeDoc as IAssemblyDoc;
+            object[] assemblyComponents = assemblyDoc?.GetComponents(false) as object[] ?? new object[0];
+
+            if (selectedObjectCount > 0)
+            {
+                for (int index = 1; index <= selectedObjectCount; index++)
+                {
+                    IComponent2 component = selectionMgr.GetSelectedObject6(index, -1) as IComponent2;
+                    if (component == null)
+                    {
+                        component = selectionMgr.GetSelectedObjectsComponent4(index, -1) as IComponent2;
+                    }
+
+                    if (component == null)
+                    {
+                        continue;
+                    }
+
+                    AddComponentExportRequest(exportRequests, component, docDir, outputBaseName, assemblyComponents);
+                    Marshal.ReleaseComObject(component);
+                }
+            }
+            else
+            {
+                if (assemblyComponents.Length > 0)
+                {
+                    foreach (IComponent2 component in assemblyComponents.Cast<IComponent2>())
+                    {
+                        if (component == null || component.IsSuppressed())
+                        {
+                            continue;
+                        }
+
+                        AddComponentExportRequest(exportRequests, component, docDir, outputBaseName, assemblyComponents);
+                    }
+                }
+            }
+
+            if (exportRequests.Count == 0)
+            {
+                SwApp.SendMsgToUser2(
+                    "В сборке не найдены детали для экспорта.",
+                    (int)swMessageBoxIcon_e.swMbWarning,
+                    (int)swMessageBoxBtn_e.swMbOk
+                );
+                return;
+            }
+
+            ProcessExportRequests(exportRequests);
+
+            SwApp.SendMsgToUser2(
+                "Обработка компонентов завершена.",
+                (int)swMessageBoxIcon_e.swMbInformation,
+                (int)swMessageBoxBtn_e.swMbOk
+            );
+        }
+        catch (Exception ex)
+        {
+            string errorMsg = $"Произошла ошибка при обработке сборки: {ex.Message}";
+            SwApp.SendMsgToUser2(
+                errorMsg,
+                (int)swMessageBoxIcon_e.swMbStop,
+                (int)swMessageBoxBtn_e.swMbOk
+            );
+            Console.WriteLine($"{errorMsg}\nСтек вызовов: {ex.StackTrace}");
+        }
+        finally
+        {
+            if (selectionMgr != null) Marshal.ReleaseComObject(selectionMgr);
+            if (activeDoc != null) Marshal.ReleaseComObject(activeDoc);
+        }
+    }
+
+    private void AddComponentExportRequest(
+        List<ExportRequest> exportRequests,
+        IComponent2 component,
+        string outputRootPath,
+        string outputBaseName,
+        object[] assemblyComponents)
+    {
+        string modelPath = component.GetPathName();
+        string componentName = GetComponentOutputBaseName(component);
+        string configName = component.ReferencedConfiguration;
+        int componentCount = CountMatchingAssemblyComponents(component, assemblyComponents);
+
+        AddExportRequest(exportRequests, modelPath, componentName, "", componentCount, configName, outputRootPath, outputBaseName, false, true);
+    }
+
+    private int CountMatchingAssemblyComponents(IComponent2 sourceComponent, object[] assemblyComponents)
+    {
+        string sourcePath = sourceComponent.GetPathName();
+        string sourceConfig = sourceComponent.ReferencedConfiguration ?? "";
+
+        int count = 0;
+        foreach (IComponent2 component in assemblyComponents.Cast<IComponent2>())
+        {
+            if (component == null || component.IsSuppressed())
+            {
+                continue;
+            }
+
+            if (string.Equals(component.GetPathName(), sourcePath, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(component.ReferencedConfiguration ?? "", sourceConfig, StringComparison.OrdinalIgnoreCase))
+            {
+                count++;
+            }
+        }
+
+        return count > 0 ? count : 1;
+    }
+
+    private void ProcessActivePart()
+    {
+        IModelDoc2 activeDoc = null;
+        ISelectionMgr selectionMgr = null;
+
+        try
+        {
+            activeDoc = SwApp.IActiveDoc2;
+            selectionMgr = activeDoc?.ISelectionManager;
+            string docDir = Path.GetDirectoryName(exportPath);
+            string partName = SanitizeFileName(Path.GetFileNameWithoutExtension(exportPath));
+            string configuration = activeDoc.GetActiveConfiguration()?.Name;
+            int selectedObjectCount = selectionMgr?.GetSelectedObjectCount2(-1) ?? 0;
+            HashSet<string> selectedFlatPatternNames = GetSelectedFlatPatternNames(selectionMgr);
+
+            if (selectedObjectCount > 0 && selectedFlatPatternNames.Count == 0)
+            {
+                SwApp.SendMsgToUser2(
+                    "В детали выделены объекты, но среди них нет разверток FlatPattern.",
+                    (int)swMessageBoxIcon_e.swMbWarning,
+                    (int)swMessageBoxBtn_e.swMbOk
+                );
+                return;
+            }
+
+            List<ExportRequest> exportRequests = new List<ExportRequest>();
+            AddExportRequest(exportRequests, exportPath, partName, "", 1, configuration, docDir, partName, false);
+
+            if (exportRequests.Count > 0)
+            {
+                ExportRequest request = exportRequests[0];
+                PrepareOutputFolders(request, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+
+                Console.WriteLine($"\nКомпонент: {request.Position} - {request.PartName} - {request.ComponentCount}шт");
+                if (selectedFlatPatternNames.Count > 0)
+                {
+                    Console.WriteLine($"Выбрано разверток: {selectedFlatPatternNames.Count}");
+                }
+
+                TraverseCutListFolders(
+                    activeDoc,
+                    request.PartName,
+                    request.Position,
+                    request.ComponentCount,
+                    request.Configuration,
+                    request.HasKnownBomPosition,
+                    selectedFlatPatternNames
+                );
+            }
+
+            SwApp.SendMsgToUser2(
+                "Обработка детали завершена.",
+                (int)swMessageBoxIcon_e.swMbInformation,
+                (int)swMessageBoxBtn_e.swMbOk
+            );
+        }
+        catch (Exception ex)
+        {
+            string errorMsg = $"Произошла ошибка при обработке детали: {ex.Message}";
+            SwApp.SendMsgToUser2(
+                errorMsg,
+                (int)swMessageBoxIcon_e.swMbStop,
+                (int)swMessageBoxBtn_e.swMbOk
+            );
+            Console.WriteLine($"{errorMsg}\nСтек вызовов: {ex.StackTrace}");
+        }
+        finally
+        {
+            if (selectionMgr != null) Marshal.ReleaseComObject(selectionMgr);
+            if (activeDoc != null) Marshal.ReleaseComObject(activeDoc);
+        }
+    }
+
+    private HashSet<string> GetSelectedFlatPatternNames(ISelectionMgr selectionMgr)
+    {
+        HashSet<string> selectedFlatPatternNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int selectedObjectCount = selectionMgr?.GetSelectedObjectCount2(-1) ?? 0;
+
+        for (int index = 1; index <= selectedObjectCount; index++)
+        {
+            Feature feature = selectionMgr.GetSelectedObject6(index, -1) as Feature;
+            if (feature == null || feature.GetTypeName2() != "FlatPattern")
+            {
+                continue;
+            }
+
+            selectedFlatPatternNames.Add(feature.Name);
+        }
+
+        return selectedFlatPatternNames;
+    }
+
+    class ExportRequest
+    {
+        public string ModelPath;
+        public string PartName;
+        public string Position;
+        public int ComponentCount;
+        public string Configuration;
+        public string OutputRootPath;
+        public string OutputBaseName;
+        public bool HasKnownBomPosition;
+    }
+
+    private void AddExportRequest(
+        List<ExportRequest> exportRequests,
+        string modelPath,
+        string partName,
+        string position,
+        int componentCount,
+        string configuration,
+        string outputRootPath,
+        string outputBaseName,
+        bool hasKnownBomPosition,
+        bool componentCountIsExact = false)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath))
+        {
+            Console.WriteLine($"Не удалось добавить задачу экспорта для {partName}: пустой путь к модели.");
+            return;
+        }
+
+        if (Path.GetExtension(modelPath).Equals(".sldprt", StringComparison.OrdinalIgnoreCase) == false)
+        {
+            Console.WriteLine($"Модель пропущена, так как не является деталью: {modelPath}");
+            return;
+        }
+
+        if (!hasKnownBomPosition)
+        {
+            ExportRequest existingRequest = exportRequests.FirstOrDefault(request =>
+                !request.HasKnownBomPosition
+                && string.Equals(request.ModelPath, modelPath, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(request.Configuration ?? "", configuration ?? "", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(request.OutputRootPath ?? "", outputRootPath ?? "", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(request.OutputBaseName ?? "", outputBaseName ?? "", StringComparison.OrdinalIgnoreCase));
+
+            if (existingRequest != null)
+            {
+                int normalizedComponentCount = componentCount <= 0 ? 1 : componentCount;
+                existingRequest.ComponentCount = componentCountIsExact
+                    ? Math.Max(existingRequest.ComponentCount, normalizedComponentCount)
+                    : existingRequest.ComponentCount + normalizedComponentCount;
+                return;
+            }
+        }
+
+        exportRequests.Add(new ExportRequest
+        {
+            ModelPath = modelPath,
+            PartName = partName,
+            Position = position,
+            ComponentCount = componentCount <= 0 ? 1 : componentCount,
+            Configuration = configuration,
+            OutputRootPath = outputRootPath,
+            OutputBaseName = outputBaseName,
+            HasKnownBomPosition = hasKnownBomPosition
+        });
+    }
+
+    private string GetBomOutputBaseName(IBomTableAnnotation bomTable)
+    {
+        try
+        {
+            string referencedModelName = bomTable?.BomFeature?.GetReferencedModelName();
+            string name = Path.GetFileNameWithoutExtension(referencedModelName);
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                return SanitizeFileName(name);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Не удалось определить имя родительской модели BOM: {ex.Message}");
+        }
+
+        return SanitizeFileName(Path.GetFileNameWithoutExtension(exportPath));
+    }
+
+    private string GetComponentOutputBaseName(IComponent2 component)
+    {
+        string modelName = Path.GetFileNameWithoutExtension(component.GetPathName());
+        if (!string.IsNullOrWhiteSpace(modelName))
+        {
+            return SanitizeFileName(modelName);
+        }
+
+        return SanitizeFileName(component.Name2 ?? component.Name ?? "Component");
+    }
+
+    private string SanitizeFileName(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "Export";
+        }
+
+        string sanitized = value;
+        foreach (char invalidChar in Path.GetInvalidFileNameChars())
+        {
+            sanitized = sanitized.Replace(invalidChar, '_');
+        }
+
+        return sanitized.Trim();
+    }
+
+    private void PrepareOutputFolders(ExportRequest request, HashSet<string> preparedOutputFolders)
+    {
+        string outputBaseName = SanitizeFileName(request.OutputBaseName);
+        string outputRootPath = string.IsNullOrWhiteSpace(request.OutputRootPath)
+            ? Path.GetDirectoryName(exportPath)
+            : request.OutputRootPath;
+
+        DXFPath = Path.Combine(outputRootPath, $"{outputBaseName} - DXF");
+        IGSPath = Path.Combine(outputRootPath, $"{outputBaseName} - IGS");
+
+        string key = $"{DXFPath}|{IGSPath}";
+        if (preparedOutputFolders.Contains(key))
+        {
+            return;
+        }
+
+        PrepareExportFolder(DXFPath);
+        PrepareExportFolder(IGSPath);
+        preparedOutputFolders.Add(key);
+    }
+
+    private void PrepareExportFolder(string folderPath)
+    {
+        Directory.CreateDirectory(folderPath);
+    }
+
+    private void DeleteExistingExportFile(string filePath)
+    {
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    private void ProcessExportRequests(List<ExportRequest> exportRequests)
+    {
+        IModelDoc2 currentDoc = null;
+        string currentModelPath = null;
+        HashSet<string> preparedOutputFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (ExportRequest request in exportRequests)
+            {
+                try
+                {
+                    Console.WriteLine($"\nКомпонент: {request.Position} - {request.PartName} - {request.ComponentCount}шт");
+                    PrepareOutputFolders(request, preparedOutputFolders);
+
+                    if (!string.Equals(currentModelPath, request.ModelPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        CloseExportDocument(currentDoc);
+                        currentDoc = null;
+                        currentModelPath = null;
+
+                        currentDoc = OpenAndActivateExportDocument(request.ModelPath, request.Configuration);
+                        if (currentDoc == null)
+                        {
+                            continue;
+                        }
+
+                        currentModelPath = request.ModelPath;
+                    }
+                    else
+                    {
+                        int errors = 0;
+                        IModelDoc2 activeDoc = SwApp.ActivateDoc3(
+                            request.ModelPath,
+                            false,
+                            (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
+                            ref errors
+                        );
+
+                        if (activeDoc == null || errors != 0)
+                        {
+                            Console.WriteLine($"Ошибка: не удалось активировать документ: {request.ModelPath}, errors={errors}");
+                            continue;
+                        }
+
+                        if (!ReferenceEquals(activeDoc, currentDoc))
+                        {
+                            Marshal.ReleaseComObject(currentDoc);
+                            currentDoc = activeDoc;
+                        }
+                    }
+
+                    TraverseCutListFolders(currentDoc, request.PartName, request.Position, request.ComponentCount, request.Configuration, request.HasKnownBomPosition);
+                }
+                catch (Exception ex)
+                {
+                    string errorMsg = $"Произошла ошибка при обработке детали {request.PartName}: {ex.Message}";
+                    SwApp.SendMsgToUser2(
+                        errorMsg,
+                        (int)swMessageBoxIcon_e.swMbStop,
+                        (int)swMessageBoxBtn_e.swMbOk
+                    );
+                    Console.WriteLine($"{errorMsg}\nСтек вызовов: {ex.StackTrace}");
+                }
+            }
+        }
+        finally
+        {
+            CloseExportDocument(currentDoc);
+        }
+    }
+
+    private IModelDoc2 OpenAndActivateExportDocument(string modelPath, string configuration)
+    {
+        int errors = 0;
+        int warnings = 0;
+        IModelDoc2 doc = SwApp.OpenDoc6(
+            modelPath,
+            (int)swDocumentTypes_e.swDocPART,
+            (int)swOpenDocOptions_e.swOpenDocOptions_Silent,
+            configuration ?? "",
+            ref errors,
+            ref warnings
+        );
+
+        if (doc == null || errors != 0)
+        {
+            Console.WriteLine($"Ошибка: не удалось открыть документ: {modelPath}, errors={errors}, warnings={warnings}");
+            return null;
+        }
+
+        errors = 0;
+        IModelDoc2 activeDoc = SwApp.ActivateDoc3(
+            modelPath,
+            false,
+            (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
+            ref errors
+        );
+
+        if (activeDoc == null || errors != 0)
+        {
+            Console.WriteLine($"Ошибка: не удалось активировать документ: {modelPath}, errors={errors}");
+            Marshal.ReleaseComObject(doc);
+            return null;
+        }
+
+        if (!ReferenceEquals(activeDoc, doc))
+        {
+            Marshal.ReleaseComObject(doc);
+            return activeDoc;
+        }
+
+        return doc;
+    }
+
+    private void CloseExportDocument(IModelDoc2 doc)
+    {
+        if (doc == null)
+        {
+            return;
+        }
+
+        string title = doc.GetTitle();
+        SwApp.CloseDoc(title);
+        Marshal.ReleaseComObject(doc);
+    }
+
     class DXFExportTask
     {
         public Feature FlatPatternFeature;
@@ -357,19 +789,23 @@ public class SolidWorksMacro
         public string bodyName;
     }
     private void TraverseCutListFolders(
-        IPartDoc partDoc,
+        IModelDoc2 doc,
         string iPartName,
         string iPosition,
         int iComponentCount,
-        string configuration)
+        string configuration,
+        bool hasKnownBomPosition,
+        HashSet<string> selectedFlatPatternNames = null)
     {
-        IModelDoc2 model = null;
         Feature feat = null;
+        bool filterBySelectedFlatPatterns = selectedFlatPatternNames != null && selectedFlatPatternNames.Count > 0;
 
         List<DXFExportTask> exportTasks = new List<DXFExportTask>();
+        Dictionary<string, int> dxfFileNameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> igsFileNameCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         try
         {
-            if (partDoc == null)
+            if (doc == null)
             {
                 SwApp.SendMsgToUser2(
                     $"Не удалось получить документ детали для {iPartName}.",
@@ -377,29 +813,6 @@ public class SolidWorksMacro
                     (int)swMessageBoxBtn_e.swMbOk
                 );
                 Console.WriteLine($"Ошибка: Не удалось получить документ детали для {iPartName}.");
-                return;
-            }
-
-            model = (IModelDoc2)partDoc;
-            string modelPath = model.GetPathName();
-
-            // Активируем документ
-            int errors = 0;
-            IModelDoc2 doc = SwApp.ActivateDoc3(
-                modelPath,
-                false,
-                (int)swRebuildOnActivation_e.swDontRebuildActiveDoc,
-                ref errors
-            );
-
-            if (errors != 0)
-            {
-                SwApp.SendMsgToUser2(
-                    $"Не удалось активировать документ: {modelPath}",
-                    (int)swMessageBoxIcon_e.swMbStop,
-                    (int)swMessageBoxBtn_e.swMbOk
-                );
-                Console.WriteLine($"Ошибка: Не удалось активировать документ: {modelPath}");
                 return;
             }
 
@@ -490,9 +903,19 @@ public class SolidWorksMacro
 
                     if (cutListType == 3) // Сварная конструкция
                     {
+                        if (filterBySelectedFlatPatterns)
+                        {
+                            Marshal.ReleaseComObject(firstBody);
+                            if (bodyFolder != null) Marshal.ReleaseComObject(bodyFolder);
+                            if (subFeat != null) Marshal.ReleaseComObject(subFeat);
+                            subFeat = nextSubFeat;
+                            continue;
+                        }
+
                         var (length, width, depth) = GetWeldBodyProperties(subFeat);
 
-                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {width}х{depth}х{length}мм - {bodies.Length * iComponentCount}шт";
+                        string fileName = BuildExportFileName(iPosition, cutListIndex, iPartName, configuration, $"{width}х{depth}х{length}", bodies.Length * iComponentCount, hasKnownBomPosition);
+                        fileName = BuildUniqueExportFileName(fileName, igsFileNameCounts);
 
                         ExportBodyToIGS(firstBody, fileName);
                     }
@@ -501,7 +924,7 @@ public class SolidWorksMacro
                     {
                         var (length, width, thickness) = GetSheetMetalProperties(subFeat); ;
 
-                        string fileName = $"{iPosition}.{cutListIndex} - {iPartName.Trim()}  {length}х{width}х{thickness}мм - {bodies.Length * iComponentCount}шт";
+                        string fileName = BuildExportFileName(iPosition, cutListIndex, iPartName, configuration, $"{length}х{width}х{thickness}", bodies.Length * iComponentCount, hasKnownBomPosition);
 
                         object[] bodyFeatures = firstBody.GetFeatures() as object[];
                         if (bodyFeatures == null || bodyFeatures.Length < 1)
@@ -515,12 +938,15 @@ public class SolidWorksMacro
                             {
                                 string bodyFeatType = bodyFeat.GetTypeName2();
                                 if (bodyFeatType != "FlatPattern") continue;
+                                if (filterBySelectedFlatPatterns && !selectedFlatPatternNames.Contains(bodyFeat.Name)) continue;
+
+                                string uniqueFileName = BuildUniqueExportFileName(fileName, dxfFileNameCounts);
 
                                 // Добавляем задание на экспорт
                                 exportTasks.Add(new DXFExportTask
                                 {
                                     FlatPatternFeature = (Feature)bodyFeat,
-                                    FileName = fileName,
+                                    FileName = uniqueFileName,
                                     model = doc,
                                     bodyName = firstBody.Name
                                 });
@@ -581,21 +1007,41 @@ public class SolidWorksMacro
         }
         finally
         {
-            // Проверяешь, остался ли активным нужный документ
-            IModelDoc2 currentActiveDoc = SwApp.IActiveDoc2;
-            if (currentActiveDoc != null && model != null)
-            {
-                string currentPath = currentActiveDoc.GetPathName();
-                if (currentPath == model.GetPathName())
-                {
-                    // Документ task.model все еще активен
-                    SwApp.CloseDoc(model.GetTitle());
-                }
-            }
-            if (currentActiveDoc != null) Marshal.ReleaseComObject(currentActiveDoc);
-            if (model != null) Marshal.ReleaseComObject(model);
             if (feat != null) Marshal.ReleaseComObject(feat);
         }
+    }
+
+    private string BuildExportFileName(
+        string position,
+        int cutListIndex,
+        string partName,
+        string configuration,
+        string dimensions,
+        int quantity,
+        bool hasKnownBomPosition)
+    {
+        string configurationSuffix = string.IsNullOrWhiteSpace(configuration)
+            ? ""
+            : $" - {SanitizeFileName(configuration)}";
+
+        string positionPrefix = hasKnownBomPosition
+            ? $"{position}.{cutListIndex} - "
+            : "";
+
+        return $"{positionPrefix}{partName.Trim()}{configurationSuffix}  {dimensions}мм - {quantity}шт";
+    }
+
+    private string BuildUniqueExportFileName(string fileName, Dictionary<string, int> fileNameCounts)
+    {
+        if (!fileNameCounts.TryGetValue(fileName, out int count))
+        {
+            fileNameCounts[fileName] = 1;
+            return fileName;
+        }
+
+        count++;
+        fileNameCounts[fileName] = count;
+        return $"{fileName} - {count}";
     }
 
     private void DisablePerspectiveView(IModelDoc2 doc)
@@ -635,6 +1081,7 @@ public class SolidWorksMacro
         varAlignment = dataAlignment;
 
         string filePath = Path.Combine(DXFPath, $"{fileName}.dxf");
+        DeleteExistingExportFile(filePath);
         // Console.WriteLine($"    DXF: {filePath} ");
         // Выбор фичи и экспорт
         if (flatPattern.Select2(false, -1))
@@ -886,6 +1333,7 @@ public class SolidWorksMacro
             }
 
             string fullPath = Path.Combine(IGSPath, $"{fileName}.igs");
+            DeleteExistingExportFile(fullPath);
 
             bool saveResult = newPart.Extension.SaveAs(
                 fullPath,
