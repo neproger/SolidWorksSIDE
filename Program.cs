@@ -1255,6 +1255,39 @@ public class SolidWorksMacro
         return options;
     }
 
+    private IModelDoc2 CreateNewPartDocument(out string usedTemplatePath)
+    {
+        usedTemplatePath = string.Empty;
+
+        string defaultTemplatePath = SwApp.GetUserPreferenceStringValue((int)swUserPreferenceStringValue_e.swDefaultTemplatePart)?.Trim();
+        Console.WriteLine($"Попытка создать документ детали с шаблоном по умолчанию: '{defaultTemplatePath}'");
+
+        if (string.IsNullOrWhiteSpace(defaultTemplatePath))
+        {
+            Console.WriteLine("Шаблон детали по умолчанию не настроен.");
+            return null;
+        }
+
+        if (!File.Exists(defaultTemplatePath))
+        {
+            Console.WriteLine($"Шаблон детали по умолчанию не найден по пути: '{defaultTemplatePath}'");
+            return null;
+        }
+
+        IModelDoc2 newPart = SwApp.NewDocument(
+            defaultTemplatePath,
+            (int)swDwgPaperSizes_e.swDwgPaperA4size,
+            0, 0
+        );
+
+        if (newPart != null)
+        {
+            usedTemplatePath = defaultTemplatePath;
+        }
+
+        return newPart;
+    }
+
     private void ExportBodyToIGS(IBody2 body, string fileName)
     {
         IModelDoc2 activeDoc = null;
@@ -1279,22 +1312,20 @@ public class SolidWorksMacro
 
             int errors = 0;
             int warnings = 0;
-            newPart = SwApp.NewDocument(
-                SwApp.GetUserPreferenceStringValue((int)swUserPreferenceStringValue_e.swDefaultTemplatePart),
-                (int)swDwgPaperSizes_e.swDwgPaperA4size,
-                0, 0
-            );
+            newPart = CreateNewPartDocument(out string usedTemplatePath);
 
             if (newPart == null)
             {
                 SwApp.SendMsgToUser2(
-                    "Не удалось создать новый документ детали.",
+                    "Не удалось создать новый документ детали. Установите шаблон детали по умолчанию в SolidWorks.",
                     (int)swMessageBoxIcon_e.swMbStop,
                     (int)swMessageBoxBtn_e.swMbOk
                 );
-                Console.WriteLine("Ошибка: Не удалось создать новый документ детали.");
+                Console.WriteLine("Ошибка: Не удалось создать новый документ детали. Установите шаблон детали по умолчанию в SolidWorks.");
                 return;
             }
+
+            Console.WriteLine($"Создан документ детали с шаблоном: {usedTemplatePath}");
 
             partDoc = newPart as IPartDoc;
             if (partDoc == null)
