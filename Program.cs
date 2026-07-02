@@ -611,7 +611,10 @@ public class SolidWorksMacro
             return "Export";
         }
 
-        string sanitized = value;
+        string sanitized = value
+            .Replace('<', '[')
+            .Replace('>', ']');
+
         foreach (char invalidChar in Path.GetInvalidFileNameChars())
         {
             sanitized = sanitized.Replace(invalidChar, '_');
