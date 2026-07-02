@@ -422,6 +422,7 @@ public class SolidWorksMacro
             }
 
             doc.ForceRebuild3(false);
+            DisablePerspectiveView(doc);
 
             feat = doc.FirstFeature();
             Feature nextFeat = null;
@@ -596,6 +597,17 @@ public class SolidWorksMacro
             if (feat != null) Marshal.ReleaseComObject(feat);
         }
     }
+
+    private void DisablePerspectiveView(IModelDoc2 doc)
+    {
+        IModelView activeView = doc?.IActiveView;
+        if (activeView != null && activeView.HasPerspective())
+        {
+            activeView.RemovePerspective();
+            Console.WriteLine("Перспектива отключена для экспорта.");
+        }
+    }
+
     public void ExportSheetMetalToDXF(
         Feature flatPattern,
         string fileName,
@@ -616,13 +628,7 @@ public class SolidWorksMacro
 
         PartDoc partDoc = swModel as PartDoc;
 
-        double[] dataAlignment = new double[]
-        {
-            1, 0, 0,  // X-направление
-            0, 1, 0,  // Y-направление
-            0, 0, 1,  // Z-направление
-            0, 0, 0   // Смещение
-        };
+        double[] dataAlignment = BuildFlatPatternAlignment(flatPattern, swModel);
 
         object varAlignment;
 
@@ -654,6 +660,124 @@ public class SolidWorksMacro
                 Console.WriteLine($"    DXF Успешно сохранен: {filePath}");
             }
         }
+    }
+
+    private double[] BuildFlatPatternAlignment(Feature flatPattern, IModelDoc2 swModel)
+    {
+        double[] normal = GetFlatPatternFixedFaceNormal(flatPattern, swModel);
+        if (normal == null || !NormalizeVector(normal))
+        {
+            normal = new double[] { 0, 0, 1 };
+        }
+
+        double[] xDirection = ProjectVectorToPlane(new double[] { 1, 0, 0 }, normal);
+        if (!NormalizeVector(xDirection))
+        {
+            xDirection = ProjectVectorToPlane(new double[] { 0, 1, 0 }, normal);
+            NormalizeVector(xDirection);
+        }
+
+        double[] yDirection = CrossProduct(normal, xDirection);
+        NormalizeVector(yDirection);
+
+        return new double[]
+        {
+            xDirection[0], xDirection[1], xDirection[2],
+            yDirection[0], yDirection[1], yDirection[2],
+            normal[0], normal[1], normal[2],
+            0, 0, 0
+        };
+    }
+
+    private double[] GetFlatPatternFixedFaceNormal(Feature flatPattern, IModelDoc2 swModel)
+    {
+        IFlatPatternFeatureData flatPatternData = null;
+
+        try
+        {
+            flatPatternData = flatPattern.GetDefinition() as IFlatPatternFeatureData;
+            if (flatPatternData == null)
+            {
+                return null;
+            }
+
+            flatPatternData.AccessSelections(swModel, null);
+            IFace2 fixedFace = flatPatternData.FixedFace2 as IFace2;
+            if (fixedFace == null)
+            {
+                return null;
+            }
+
+            object normalObject = fixedFace.Normal;
+            if (normalObject is double[] normal && normal.Length >= 3)
+            {
+                return new double[] { normal[0], normal[1], normal[2] };
+            }
+
+            ISurface surface = fixedFace.GetSurface() as ISurface;
+            if (surface != null && surface.IsPlane())
+            {
+                object planeParamsObject = surface.PlaneParams;
+                if (planeParamsObject is double[] planeParams && planeParams.Length >= 6)
+                {
+                    return new double[] { planeParams[3], planeParams[4], planeParams[5] };
+                }
+            }
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Не удалось получить нормаль фиксированной грани развертки: {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            if (flatPatternData != null)
+            {
+                flatPatternData.ReleaseSelectionAccess();
+            }
+        }
+    }
+
+    private double[] ProjectVectorToPlane(double[] vector, double[] normal)
+    {
+        double dot = DotProduct(vector, normal);
+        return new double[]
+        {
+            vector[0] - dot * normal[0],
+            vector[1] - dot * normal[1],
+            vector[2] - dot * normal[2]
+        };
+    }
+
+    private bool NormalizeVector(double[] vector)
+    {
+        double length = Math.Sqrt(DotProduct(vector, vector));
+        if (length < 1e-9)
+        {
+            return false;
+        }
+
+        vector[0] /= length;
+        vector[1] /= length;
+        vector[2] /= length;
+        return true;
+    }
+
+    private double DotProduct(double[] first, double[] second)
+    {
+        return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+    }
+
+    private double[] CrossProduct(double[] first, double[] second)
+    {
+        return new double[]
+        {
+            first[1] * second[2] - first[2] * second[1],
+            first[2] * second[0] - first[0] * second[2],
+            first[0] * second[1] - first[1] * second[0]
+        };
     }
 
     /// <summary>
